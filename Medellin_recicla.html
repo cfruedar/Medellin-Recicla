@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Medellín Recicla</title>
+
+    <!-- React + Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+    <!-- Leaflet (map) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f3f4f6;
+            overflow: hidden;
+        }
+        #root { width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
+        .app-wrapper {
+            width:100%; max-width:430px; height:100vh; max-height:932px;
+            background:white; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1);
+            display:flex; flex-direction:column; overflow:hidden;
+        }
+        .screen-container { flex:1; overflow-y:auto; overflow-x:hidden; }
+        .nav-bottom { flex-shrink:0; border-top:1px solid #e5e7eb; background:white; }
+        /* Leaflet map height inside screen */
+        .map-full { width:100%; height: 320px; border-radius:8px; overflow:hidden; }
+        /* Modal backdrop */
+        .modal-bg { position: fixed; inset:0; background: rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    /* ---------- ICONS ---------- */
+    const HomeIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+    );
+    const SearchIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+        </svg>
+    );
+    const MapIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
+            <line x1="9" y1="3" x2="9" y2="18"/>
+            <line x1="15" y1="6" x2="15" y2="21"/>
+        </svg>
+    );
+    const LeafIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/>
+            <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
+        </svg>
+    );
+    const BellIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+        </svg>
+    );
+    const SettingsIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v6m0 6v6"/>
+        </svg>
+    );
+    const MapPinIcon = ({ size = 24 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+            <circle cx="12" cy="10" r="3"/>
+        </svg>
+    );
+    const BookIcon = ({ size = 28 }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 8H20V20H6.5A2.5 2.5 0 0 1 4 17.5V5.5Z" />
+        </svg>
+    );
+
+    /* ---------- UTIL: localStorage helpers ---------- */
+    const readNumber = (key, fallback) => {
+        const v = localStorage.getItem(key);
+        const n = parseFloat(v);
+        return (isNaN(n) ? fallback : n);
+    };
+
+    /* ---------- APP ---------- */
+    const App = () => {
+        // Pantalla
+        const [screen, setScreen] = useState('home');
+
+        // Persistencia de kilos: total y semanal
+        const [totalKg, setTotalKg] = useState(() => readNumber('mr_totalKg', 250));
+        const [weeklyKg, setWeeklyKg] = useState(() => readNumber('mr_weeklyKg', 12.5));
+
+        // Clasificar
+        const [category, setCategory] = useState(null);
+        const [searchTerm, setSearchTerm] = useState('');
+        const [searchResults, setSearchResults] = useState([]);
+
+        // Modal registrar kilos
+        const [showModal, setShowModal] = useState(false);
+        const [newKilos, setNewKilos] = useState('');
+
+        // Guardar automáticamente cambios
+        useEffect(() => {
+            localStorage.setItem('mr_totalKg', String(totalKg));
+            localStorage.setItem('mr_weeklyKg', String(weeklyKg));
+        }, [totalKg, weeklyKg]);
+
+        const categories = {
+            plastico: {
+                name: 'Plástico',
+                color: 'bg-green-500',
+                items: [
+                    { text: 'Envase de yogurt', icon: '🥛' },
+                    { text: 'Botella PET (Gaseosa, Agua)', icon: '🍼' },
+                    { text: 'Bolsas de plástico limpias', icon: '🛍️' },
+                    { text: 'Recipientes de detergentes', icon: '🧴' },
+                    { text: 'Empaques flexibles (Snacks)', icon: '🍿' }
+                ]
+            },
+            vidrio: {
+                name: 'Vidrio',
+                color: 'bg-yellow-700',
+                items: [
+                    { text: 'Botellas de bebidas (Cervezas, Gaseosas)', icon: '🍺' },
+                    { text: 'Frascos de alimentos (Café, Mermeladas)', icon: '🫙' },
+                    { text: 'Envases de cosméticos/perfumes', icon: '🧴' }
+                ]
+            },
+            papel: {
+                name: 'Papel/Cartón',
+                color: 'bg-blue-400',
+                items: [
+                    { text: 'Cajas de cartón limpias', icon: '📦' },
+                    { text: 'Cartón de huevos', icon: '🥚' },
+                    { text: 'Envases', icon: '📄' }
+                ]
+            },
+            metal: {
+                name: 'Metal',
+                color: 'bg-gray-500',
+                items: [
+                    { text: 'Latas de aluminio (Gaseosa, Cervezas)', icon: '🥫' },
+                    { text: 'Envases de comida (Arvejas, Maíz)', icon: '🥫' },
+                    { text: 'Tapas metálicas', icon: '⚙️' },
+                    { text: 'Latas de aceite cocina (vacías)', icon: '🛢️' },
+                    { text: 'Papel aluminio (limpio)', icon: '📋' }
+                ]
+            }
+        };
+
+        /* ---------- FUNCIONES ---------- */
+        const runSearch = (q) => {
+            const query = (q || '').trim().toLowerCase();
+            if (!query) { setSearchResults([]); return; }
+            const results = [];
+            Object.entries(categories).forEach(([key, cat]) => {
+                cat.items.forEach(item => {
+                    if (item.text.toLowerCase().includes(query)) {
+                        results.push({ categoryKey: key, categoryName: cat.name, item });
+                    }
+                });
+            });
+            setSearchResults(results);
+        };
+
+        const openCategoryFromResult = (r) => {
+            setCategory(r.categoryKey);
+            setSearchTerm('');
+            setSearchResults([]);
+        };
+
+        const openCategory = (key) => {
+            setCategory(key);
+        };
+
+        const registerKilosModal = () => {
+            const v = parseFloat(String(newKilos).replace(',', '.'));
+            if (isNaN(v) || v <= 0) {
+                alert('Ingresa un número válido mayor que 0.');
+                return;
+            }
+            setTotalKg(prev => Math.round((prev + v) * 100) / 100);
+            setWeeklyKg(prev => Math.round((weeklyKg + v) * 100) / 100);
+            setNewKilos('');
+            setShowModal(false);
+            // llevar al perfil o dejar en la misma pantalla: mantendremos en misma pantalla
+        };
+
+        /* ---------- SCREENS ---------- */
+
+        const HomeScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-white p-4 flex items-center justify-between border-b border-gray-200">
+                    <div className="flex items-center gap-2">
+                        <LeafIcon size={24} />
+                        <h1 className="text-2xl font-bold">Medellín Recicla</h1>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gray-300 rounded-full"></div>
+                        <BellIcon size={24} />
+                    </div>
+                </div>
+
+                <div 
+                    className="bg-green-500 text-white p-6 cursor-pointer"
+                    onClick={() => setScreen('impacto')}
+                >
+                    <p className="text-sm mb-2">Tu impacto de la semana</p>
+                    <div className="flex items-end gap-2">
+                        <span className="text-6xl font-bold">{weeklyKg}</span>
+                        <span className="text-xl mb-2">kg reciclados ✓</span>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 p-4">
+                    <button
+                        onClick={() => setScreen('clasificar')}
+                        className="bg-green-500 text-white p-6 rounded-lg flex flex-col items-center justify-center gap-2"
+                    >
+                        <div className="text-4xl">🔍</div>
+                        <span className="font-semibold">Clasificar</span>
+                    </button>
+
+                    <button
+                        onClick={() => setScreen('puntos')}
+                        className="bg-blue-400 text-white p-6 rounded-lg flex flex-col items-center justify-center gap-2"
+                    >
+                        <MapPinIcon size={32} />
+                        <span className="font-semibold">Puntos de acopio</span>
+                    </button>
+
+                    <button
+                        onClick={() => setScreen('habito')}
+                        className="bg-purple-500 text-white p-6 rounded-lg flex flex-col items-center justify-center gap-2"
+                    >
+                        <div className="text-4xl">👕</div>
+                        <span className="font-semibold">Mi hábito</span>
+                    </button>
+
+                    <button
+                        onClick={() => setScreen('educacion')}
+                        className="bg-blue-500 text-white p-6 rounded-lg flex flex-col items-center justify-center gap-2"
+                    >
+                        <BookIcon size={30} />
+                        <span className="font-semibold text-center">Educación</span>
+                    </button>
+                </div>
+
+                <div className="p-4 bg-gray-50 flex-1">
+                    <h2 className="font-semibold mb-3">Consejos Ecológicos</h2>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <div className="text-2xl mb-2">🧹</div>
+                            <p className="text-xs">Recuerda limpiar los espacios antes de reciclar</p>
+                        </div>
+                        <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <div className="text-2xl mb-2">🔋</div>
+                            <p className="text-xs">Las pilas usadas van en contenedores especiales</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ImpactoScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-green-500 text-white p-4">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                            <LeafIcon size={20} />
+                            <span className="font-semibold">Medellín recicla</span>
+                        </div>
+                        <SettingsIcon size={24} />
+                    </div>
+                    <p className="text-sm mb-2">Tu impacto de la semana</p>
+                    <div className="flex items-end gap-2">
+                        <span className="text-5xl font-bold">{weeklyKg}</span>
+                        <span className="text-lg mb-1">kg reciclados</span>
+                    </div>
+                    <p className="text-sm mt-1">¡sigue así! vas muy bien</p>
+                </div>
+
+                <div className="p-4 flex-1 overflow-auto">
+                    <h3 className="font-semibold mb-3">Desglose por Material</h3>
+                    
+                    <div className="space-y-4 mb-6">
+                        <div>
+                            <div className="flex justify-between mb-1">
+                                <span className="text-sm">Plástico</span>
+                                <span className="text-green-600 font-semibold">70%</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div className="bg-green-500 h-2 rounded-full" style={{width: '70%'}}></div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between mb-1">
+                                <span className="text-sm">Papel/Cartón</span>
+                                <span className="text-teal-600 font-semibold">42%</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div className="bg-teal-500 h-2 rounded-full" style={{width: '42%'}}></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 className="font-semibold mb-3">Puntos Ecológicos</h3>
+                    <p className="text-sm text-gray-600 mb-2">Progreso Recibo (Semanal)</p>
+                    
+                    <div className="relative h-40 bg-gradient-to-t from-green-200 to-green-50 rounded-lg p-4">
+                        <svg className="w-full h-full" viewBox="0 0 300 120" preserveAspectRatio="none">
+                            <polyline points="0,100 50,80 100,70 150,50 200,40 250,20 300,10" fill="none" stroke="#22c55e" strokeWidth="3"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ClasificarScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-green-500 text-white p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <LeafIcon size={20} />
+                            <span className="font-semibold">Medellín recicla</span>
+                        </div>
+                        <span className="font-semibold">Clasificador</span>
+                    </div>
+                </div>
+
+                <div className="p-4 flex-1 overflow-auto">
+                    <div className="relative mb-4">
+                        <input
+                            type="text"
+                            placeholder="¿Que vas a desechar hoy?"
+                            className="w-full p-3 pl-10 border border-gray-300 rounded-lg"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') runSearch(searchTerm); }}
+                        />
+                        <div className="absolute left-3 top-3 text-gray-400">
+                            <SearchIcon size={20} />
+                        </div>
+                        <button
+                            onClick={() => runSearch(searchTerm)}
+                            className="absolute right-2 top-2 bg-green-500 text-white px-3 py-1 rounded-md text-sm"
+                        >
+                            Buscar
+                        </button>
+                    </div>
+
+                    {!category ? (
+                        <>
+                            <div className="mb-4">
+                                <h3 className="font-semibold mb-2">sugerencias populares</h3>
+                                <button className="w-full bg-purple-500 text-white p-3 rounded-lg mb-2 text-left"
+                                    onClick={() => { setSearchTerm('Envase de yogurt'); runSearch('Envase de yogurt'); }}>
+                                    Envase de yogurt
+                                </button>
+                                <button className="w-full bg-gray-300 p-3 rounded-lg text-left"
+                                    onClick={() => { setSearchTerm('Pila'); runSearch('Pila'); }}>
+                                    Pila
+                                </button>
+                            </div>
+
+                            {/* resultados de búsqueda si existen */}
+                            {searchResults && searchResults.length > 0 && (
+                                <div className="mb-4">
+                                    <h3 className="font-semibold mb-2">Resultados</h3>
+                                    <div className="space-y-2">
+                                        {searchResults.map((r, i) => (
+                                            <button key={i} onClick={() => openCategoryFromResult(r)}
+                                                className="w-full bg-white border border-gray-200 rounded-lg p-3 flex items-center gap-3 text-left">
+                                                <div className="text-2xl">{r.item.icon}</div>
+                                                <div>
+                                                    <div className="font-semibold text-sm">{r.item.text}</div>
+                                                    <div className="text-xs text-gray-500">{r.categoryName}</div>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <h3 className="font-semibold mb-3">Explora por categoría</h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={() => openCategory('plastico')} className="bg-green-500 text-white p-8 rounded-lg flex flex-col items-center justify-center gap-2">
+                                    <div className="text-4xl">♻️</div>
+                                    <span className="font-semibold">Plástico</span>
+                                </button>
+
+                                <button onClick={() => openCategory('vidrio')} className="bg-yellow-700 text-white p-8 rounded-lg flex flex-col items-center justify-center gap-2">
+                                    <div className="text-4xl">🍾</div>
+                                    <span className="font-semibold">Vidrio</span>
+                                </button>
+
+                                <button onClick={() => openCategory('papel')} className="bg-blue-400 text-white p-8 rounded-lg flex flex-col items-center justify-center gap-2">
+                                    <div className="text-4xl">📄</div>
+                                    <span className="font-semibold">Papel/cartón</span>
+                                </button>
+
+                                <button onClick={() => openCategory('metal')} className="bg-gray-500 text-white p-8 rounded-lg flex flex-col items-center justify-center gap-2">
+                                    <div className="text-4xl">🥫</div>
+                                    <span className="font-semibold">Metal</span>
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <div>
+                            <button onClick={() => setCategory(null)} className="mb-4 text-green-600 flex items-center gap-2 font-semibold">← Volver</button>
+                            <div className={`${categories[category].color} text-white p-4 rounded-lg mb-4`}>
+                                <h2 className="text-2xl font-bold mb-2">{categories[category].name}</h2>
+                                <p className="text-sm">Puedes reciclar los siguientes elementos:</p>
+                            </div>
+                            <div className="space-y-2">
+                                {categories[category].items.map((item, idx) => (
+                                    <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 flex items-center gap-3">
+                                        <div className="text-2xl">{item.icon}</div>
+                                        <span className="text-sm flex-1">{item.text}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+
+        /* ---------- PuntosScreen - Ahora con Leaflet y filtros ---------- */
+        const PuntosScreen = () => {
+            const mapRef = useRef(null);
+            const layerGroupRef = useRef(null);
+            const [filtro, setFiltro] = useState('Todo');
+
+            // Datos de ejemplo: puedes ampliarlos desde aquí o cargarlos desde API
+            const puntos = [
+                { id: 1, tipo: 'Punto Limpio', nombre: 'Punto Limpio Laureles', coords: [6.245, -75.58] },
+                { id: 2, tipo: 'Punto Limpio', nombre: 'Punto Limpio El Poblado', coords: [6.21, -75.57] },
+                { id: 3, tipo: 'Reciclador', nombre: 'Reciclador Juan Pérez', coords: [6.26, -75.55] },
+                { id: 4, tipo: 'Reciclador', nombre: 'Recicladora Ana María', coords: [6.25, -75.57] }
+            ];
+
+            useEffect(() => {
+                // Crear mapa solo una vez
+                const map = L.map('map-container', { zoomControl: true }).setView([6.2476, -75.5658], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(map);
+                mapRef.current = map;
+
+                const layer = L.layerGroup().addTo(map);
+                layerGroupRef.current = layer;
+
+                // Añadir marcador usuario central
+                const userCircle = L.circleMarker([6.2476, -75.5658], { radius:8, color:'#3182ce', fillColor:'#3b82f6', fillOpacity:1 }).addTo(map);
+                userCircle.bindPopup('Tu ubicación (simulada)');
+
+                return () => {
+                    map.remove();
+                    mapRef.current = null;
+                    layerGroupRef.current = null;
+                };
+            }, []);
+
+            // Cada vez que cambia filtro, renderiza markers
+            useEffect(() => {
+                if (!mapRef.current || !layerGroupRef.current) return;
+                const layer = layerGroupRef.current;
+                layer.clearLayers();
+
+                // iconos simples usando URLs (CDN)
+                const icons = {
+                    'Punto Limpio': L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/744/744499.png', iconSize: [30,30] }),
+                    'Reciclador': L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/809/809957.png', iconSize: [30,30] })
+                };
+
+                puntos.forEach(p => {
+                    if (filtro === 'Todo' || p.tipo === filtro) {
+                        const m = L.marker(p.coords, { icon: icons[p.tipo] }).addTo(layer);
+                        m.bindPopup(`<b>${p.nombre}</b><br/>${p.tipo}`);
+                    }
+                });
+
+            }, [filtro]);
+
+            return (
+                <div className="flex flex-col h-full bg-white">
+                    <div className="bg-green-500 text-white p-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                                <LeafIcon size={20} />
+                                <span className="font-semibold">Medellín Recicla</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <SettingsIcon size={20} />
+                                <BellIcon size={20} />
+                            </div>
+                        </div>
+                        <h2 className="text-xl font-semibold">Puntos de Acopio</h2>
+                    </div>
+
+                    <div className="p-3 bg-white border-b border-gray-200 flex gap-2 overflow-x-auto">
+                        <button className={`px-4 py-2 rounded-full text-sm ${filtro==='Todo' ? 'bg-green-500 text-white' : 'bg-gray-100'}`} onClick={() => setFiltro('Todo')}>Todo</button>
+                        <button className={`px-4 py-2 rounded-full text-sm ${filtro==='Punto Limpio' ? 'bg-green-500 text-white' : 'bg-gray-100'}`} onClick={() => setFiltro('Punto Limpio')}>Punto Limpio</button>
+                        <button className={`px-4 py-2 rounded-full text-sm ${filtro==='Reciclador' ? 'bg-green-500 text-white' : 'bg-gray-100'}`} onClick={() => setFiltro('Reciclador')}>Reciclador</button>
+                    </div>
+
+                    <div className="p-4 flex-1">
+                        <div id="map-container" className="map-full"></div>
+                        <p className="text-xs text-gray-500 mt-2">Toca un marcador para ver más detalles. Usa los botones para filtrar.</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const HabitoScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-green-500 text-white p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <LeafIcon size={20} />
+                            <span className="font-semibold">Medellín recicla</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <SettingsIcon size={20} />
+                            <BellIcon size={20} />
+                        </div>
+                    </div>
+                    <h2 className="text-xl font-semibold mt-2">Mi Habito</h2>
+                </div>
+
+                <div className="p-4 flex-1 overflow-auto">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold mb-3">Recordatorio de recolección</h3>
+                        <div className="flex gap-4 mb-3">
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm">Aprovachables</span>
+                                <div className="relative inline-block w-12 h-6 bg-green-500 rounded-full">
+                                    <div className="absolute right-1 top-1 bg-white w-4 h-4 rounded-full"></div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm">Ordinarios</span>
+                                <div className="relative inline-block w-12 h-6 bg-green-500 rounded-full">
+                                    <div className="absolute right-1 top-1 bg-white w-4 h-4 rounded-full"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-4 text-sm text-gray-500">
+                            <span>Miércoles, 8:00 Am ⏰</span>
+                            <span>Viernes, 8:00 Am ⏰</span>
+                        </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold mb-3">gamificación y progreso</h3>
+                        <div className="flex items-center gap-3 mb-2">
+                            <div className="bg-green-500 text-white w-10 h-10 rounded-full flex items-center justify-center">✓</div>
+                            <div className="flex-1">
+                                <p className="font-semibold">Racha reciclaje</p>
+                                <p className="text-xs text-gray-500">*12 semanas reciclando* ¡vas muy bien!</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mt-3">
+                            <div className="flex flex-col items-center">
+                                <div className="bg-yellow-700 text-white w-12 h-12 rounded-full flex items-center justify-center text-xl">🏆</div>
+                                <span className="text-xs mt-1 text-center">Vecino constante</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                                <div className="bg-gray-300 w-12 h-12 rounded-full flex items-center justify-center text-xl">🏛️</div>
+                                <span className="text-xs mt-1 text-center">Héroe de plástico</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onClick={() => setShowModal(true)} className="w-full bg-green-500 text-white p-4 rounded-lg flex items-center justify-center gap-2">
+                        <span className="text-2xl">+</span>
+                        <span className="font-semibold">Registrar Kilos Reciclados Hoy</span>
+                    </button>
+                </div>
+            </div>
+        );
+
+        const EducacionScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-green-500 text-white p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <LeafIcon size={20} />
+                            <span className="font-semibold">Medellín RECICLA</span>
+                        </div>
+                        <span className="font-semibold">Educación</span>
+                    </div>
+                </div>
+
+                <div className="p-4 flex-1 overflow-auto">
+                    <h3 className="font-semibold mb-3">codigo de colores de Medellín</h3>
+                    <div className="grid grid-cols-3 gap-2 mb-6">
+                        <div className="border border-gray-200 rounded-lg p-3 text-center">
+                            <div className="bg-white border-2 border-gray-300 w-12 h-12 mx-auto mb-2 rounded flex items-center justify-center text-2xl">📄</div>
+                            <p className="text-xs font-semibold">Bolsa Blanca</p>
+                        </div>
+                        <div className="border border-gray-200 rounded-lg p-3 text-center">
+                            <div className="bg-gray-800 w-12 h-12 mx-auto mb-2 rounded flex items-center justify-center text-2xl">🗑️</div>
+                            <p className="text-xs font-semibold">Bolsa Negra</p>
+                        </div>
+                        <div className="border border-gray-200 rounded-lg p-3 text-center">
+                            <div className="bg-green-500 w-12 h-12 mx-auto mb-2 rounded flex items-center justify-center text-2xl">♻️</div>
+                            <p className="text-xs font-semibold">Bolsa Verde</p>
+                        </div>
+                    </div>
+
+                    <h3 className="font-semibold mb-3">Residuos Especiales</h3>
+                    <div className="grid grid-cols-4 gap-3 mb-6">
+                        <div className="text-center">
+                            <div className="bg-yellow-700 w-14 h-14 mx-auto rounded-full flex items-center justify-center text-2xl mb-1">🔋</div>
+                            <p className="text-xs">Pilas</p>
+                        </div>
+                        <div className="text-center">
+                            <div className="bg-yellow-400 w-14 h-14 mx-auto rounded-full flex items-center justify-center text-2xl mb-1">🛢️</div>
+                            <p className="text-xs">Aceite</p>
+                        </div>
+                        <div className="text-center">
+                            <div className="bg-red-500 w-14 h-14 mx-auto rounded-full flex items-center justify-center text-2xl mb-1">💊</div>
+                            <p className="text-xs">Medicamentos</p>
+                        </div>
+                        <div className="text-center">
+                            <div className="bg-gray-400 w-14 h-14 mx-auto rounded-full flex items-center justify-center text-2xl mb-1">🏗️</div>
+                            <p className="text-xs">Escombros</p>
+                        </div>
+                    </div>
+
+                    <h3 className="font-semibold mb-3">El Impacto de tu Comuna</h3>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <div className="relative h-32 mb-3">
+                            <svg className="w-full h-full" viewBox="0 0 300 100" preserveAspectRatio="none">
+                                <polyline points="0,80 50,70 100,60 150,45 200,35 250,20 300,15" fill="none" stroke="#22c55e" strokeWidth="3"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <p className="text-sm font-semibold">Tasa Reciclaje: +15%</p>
+                            <p className="text-sm font-semibold">CO2 Reducido: 200kg</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const PerfilScreen = () => (
+            <div className="flex flex-col h-full bg-white">
+                <div className="bg-green-500 text-white p-6 text-center">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                            <LeafIcon size={20} />
+                            <span className="font-semibold">Medellín RECICLA</span>
+                        </div>
+                    </div>
+                    <h2 className="text-xl font-semibold mb-4">perfil</h2>
+                    <div className="w-24 h-24 bg-white rounded-full mx-auto mb-3 overflow-hidden">
+                        <img src="https://i.imgur.com/9KqC5Jf.png" alt="Ana Lopez" className="w-full h-full object-cover"/>
+                    </div>
+                    <h3 className="text-2xl font-bold mb-2">Ana Lopez</h3>
+                    <p className="text-sm">¡vecina saludable!</p>
+                </div>
+
+                <div className="p-4 flex-1 overflow-auto">
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold mb-2">Mi impacto</h3>
+                        <p className="text-sm mb-1">Kilos reciclados</p>
+                        <div className="flex items-center gap-2 mb-2">
+                            <span className="text-2xl font-bold">Total: {totalKg} kg</span>
+                            <div className="flex gap-1">
+                                <div className="w-6 h-6 bg-yellow-400 rounded-full"></div>
+                                <div className="w-6 h-6 bg-gray-300 rounded-full"></div>
+                                <div className="w-6 h-6 bg-yellow-700 rounded-full"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold mb-3 flex items-center justify-between">
+                            Medallas Ganadas
+                            <span className="text-2xl">🏅</span>
+                        </h3>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold mb-3">Configuracion de cuenta</h3>
+                        <button className="w-full text-left py-3 border-b border-gray-200 flex items-center gap-3 text-gray-700">
+                            <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
+                            <span className="text-sm">Editar informacion personal y notificaciones</span>
+                        </button>
+                        <button className="w-full text-left py-3 flex items-center gap-3 text-gray-700">
+                            <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
+                            <span className="text-sm">Dias de recoleccion</span>
+                        </button>
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-lg p-4">
+                        <h3 className="font-semibold mb-3">Informacion y soporte</h3>
+                        <button className="w-full text-left py-2 text-gray-700 text-sm">Preguntas Frecuentes (FAQ)</button>
+                        <button className="w-full text-left py-2 text-gray-700 text-sm">Contactanos</button>
+                        <button className="w-full text-left py-2 text-gray-700 text-sm">Terminos y condiciones</button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const screens = {
+            home: <HomeScreen />,
+            impacto: <ImpactoScreen />,
+            clasificar: <ClasificarScreen />,
+            puntos: <PuntosScreen />,
+            habito: <HabitoScreen />,
+            educacion: <EducacionScreen />,
+            perfil: <PerfilScreen />
+        };
+
+        return (
+            <div className="app-wrapper">
+                <div className="screen-container">
+                    {screens[screen]}
+                </div>
+                
+                <div className="nav-bottom p-3 flex justify-around">
+                    <button onClick={() => setScreen('home')} className={`flex flex-col items-center gap-1 ${screen === 'home' ? 'text-green-600' : 'text-gray-400'}`}>
+                        <HomeIcon size={24} />
+                        <span className="text-xs">Inicio</span>
+                    </button>
+                    <button onClick={() => setScreen('clasificar')} className={`flex flex-col items-center gap-1 ${screen === 'clasificar' ? 'text-green-600' : 'text-gray-400'}`}>
+                        <SearchIcon size={24} />
+                        <span className="text-xs">Clasificar</span>
+                    </button>
+                    <button onClick={() => setScreen('puntos')} className={`flex flex-col items-center gap-1 ${screen === 'puntos' ? 'text-green-600' : 'text-gray-400'}`}>
+                        <MapIcon size={24} />
+                        <span className="text-xs">Rutas</span>
+                    </button>
+                    <button onClick={() => setScreen('perfil')} className={`flex flex-col items-center gap-1 ${screen === 'perfil' ? 'text-green-600' : 'text-gray-400'}`}>
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center ${screen === 'perfil' ? 'bg-green-600' : 'bg-gray-400'}`}>
+                            <span className="text-white text-xs">👤</span>
+                        </div>
+                        <span className="text-xs">Perfil</span>
+                    </button>
+                </div>
+
+                {/* Modal registrar kilos (global) */}
+                {showModal && (
+                    <div className="modal-bg">
+                        <div className="bg-white rounded-2xl p-6 w-80 text-center shadow-lg">
+                            <h2 className="text-xl font-semibold mb-4">Registrar Kilos Reciclados</h2>
+                            <input
+                                type="number"
+                                step="0.1"
+                                value={newKilos}
+                                onChange={(e) => setNewKilos(e.target.value)}
+                                className="w-full border p-2 rounded mb-4"
+                                placeholder="Ej: 2.5"
+                            />
+                            <div className="flex gap-2 justify-center">
+                                <button onClick={registerKilosModal} className="bg-green-500 text-white px-4 py-2 rounded">Guardar</button>
+                                <button onClick={() => { setShowModal(false); setNewKilos(''); }} className="bg-gray-300 px-4 py-2 rounded">Cancelar</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // render
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+    </script>
+</body>
+</html>
