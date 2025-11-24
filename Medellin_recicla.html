@@ -98,8 +98,11 @@
     /* ---------- UTIL: localStorage helpers ---------- */
     const readNumber = (key, fallback) => {
         const v = localStorage.getItem(key);
-        const n = parseFloat(v);
-        return (isNaN(n) ? fallback : n);
+        if (v == null) return fallback;
+        // Aceptar coma decimal y eliminar espacios
+        const normalized = String(v).replace(',', '.').trim();
+        const n = Number(normalized);
+        return Number.isFinite(n) ? n : fallback;
     };
 
     /* ---------- APP ---------- */
@@ -196,15 +199,15 @@
 
         const registerKilosModal = () => {
             const v = parseFloat(String(newKilos).replace(',', '.'));
-            if (isNaN(v) || v <= 0) {
+            if (!Number.isFinite(v) || v <= 0) {
                 alert('Ingresa un número válido mayor que 0.');
                 return;
             }
+            // Usar la versión previa del estado para evitar condiciones de carrera
             setTotalKg(prev => Math.round((prev + v) * 100) / 100);
-            setWeeklyKg(prev => Math.round((weeklyKg + v) * 100) / 100);
+            setWeeklyKg(prev => Math.round((prev + v) * 100) / 100);
             setNewKilos('');
             setShowModal(false);
-            // llevar al perfil o dejar en la misma pantalla: mantendremos en misma pantalla
         };
 
         /* ---------- SCREENS ---------- */
